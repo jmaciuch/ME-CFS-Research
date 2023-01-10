@@ -1,0 +1,552 @@
+---
+title: "Mono Study Script.Rmd"
+author: Jess Maciuch
+date: 2022-08-17
+output: .csv files
+---
+Description: A series of scripts for streamlining participant tracking and data management 
+for the Mono study. 
+
+Please read all instruction sections before using the script. 
+
+Always run the first 'R setup' section first before running any other code blocks! 
+This sets up the "path" to all the folders and files on the W: drive that the script needs to function. 
+
+Path variables and files used for reference will always be listed in this first code block. 
+If you ever need to change the names of files or folders, always update the path and file name variables to exactly match  what is in the W: drive BEFORE running this script. 
+
+Since this code is running through thousands of data files, each section may take a minute or two to finish running! You know if code is running if there is a little red stop sign in the bottom left window of RStudio (the console), or if there is a red square next to the green "Run" button at the top right of each grey block of code. When a code block is finished running, both of those will disappear, and you will see the last line of the code block appearing in the console followed by a blank line (starting with a ">").
+
+```{r setup}
+
+# Note on "path" variables: had to use file.path() for all paths because Windows defaults to using backslashes "\" in between directories, which also happens to be a shortcut for "cancel" in R studio. 
+# To avoid this causing issues when executing the code, all 'path' variables are created using file.path() instead of copying the path from the Windows GUI.
+
+## Script paths
+# General path to 'Mono Study' folder
+  path <- file.path("W:", "csh", "PSY", "CFS", "Grant...Mono 2")
+# Path to "Call logs Completed" folder
+  path.call <- file.path(path, "Participant Tracking", "Call logs (Completed)")
+# Path to the "Mass Tracking Files" folder
+  path.masstracking <- file.path(path, "Participant Tracking", "Mass Tracking Files")
+# Path to most recent REDcap case summary file
+  path.mostrecent <- file.path(path, "Case Summaries", "Most Recent Data")
+# Path to all archived case summary files
+  path.archived <- file.path(path, "Case Summaries", "Archived Data")
+# Path to 'Duplicates' folder
+  path.dup <- file.path(path, "Case Summaries", "Review", "Duplicates")
+# Path to 'Most Recent Data (Review)' folder
+  path.review <- file.path(path, "Case Summaries", "Review", "Most Recent Data (Review)")
+# Path to 'Projections' folder
+  path.projections <- file.path(path, "Projections")
+
+## Reference files
+  # Mono diagnosis file for matching mono dx to participant ID
+  mono.dx <- read.csv(file.path(path, "Reference Files (DO NOT DELETE)", "mono_dx.csv"))
+  # Gift card tracking file
+  path.giftcard <- file.path(path, "Gift Cards", "Gift Card Tracking.csv")
+  # "MG numbers by caller" file
+  path.bycaller <- file.path(path.projections, "MG numbers by caller.csv")
+  # "Case Summary Template" Excel file
+  case.summary.template <- file.path(path, "Reference Files (DO NOT DELETE)", "Case Summary Template.xlsx")
+  # Stage 2 call log masterfile
+  path.stage2 <- file.path(path, "Medical Appointments", "Stage 2 - Medical Appointments", "Stage 2 Call Log Master File.xlsx")
+  # Archived Data Masterfile
+  path.archive.master <- file.path(path.archived, "Archived Data Masterfile", "Archived Data Masterfile.csv")
+  
+# Load dependencies 
+require(data.table)
+require(tidyverse)
+require(magrittr)
+require(openxlsx)
+require(lubridate)
+  
+setwd(path)
+```
+
+## Mass Tracking File
+# Description
+The following code block:
+1) Compiles all call log data from files located in "Call logs (Complete)" folder.
+2) Appends mono diagnosis and gift card tracking columns. 
+3) Filters call log data according to chosen mono dx groups. 
+4) Saves compiled call logs as a mass tracking file located in "Mass Tracking Files" folder.
+5) Updates "Gift Card Tracking" file with new call log info. 
+
+There is no need to run this code whenever a call log is added to the folder. This is just to create an updated mass tracking file whenever it is needed for administrative purposes. 
+
+When the code finishes running, mass tracking files are automatically uploaded to the
+"Mass Tracking Files" folder. The file name will include the date that the file was created.
+The file is ordered so that duplicate participant IDs are listed consecutively. 
+
+You can feel free to delete older mass tracking files. Since new ones can be created on demand, there is no need to save old mass tracking files unless you want to. 
+
+Before adding call logs to the "Call logs (Complete)" folder, please make sure they are formatted according to
+the "Call log formatting guide" (found in the "Call log templates" folder) and saved as a .csv file. 
+A pre-formatted call log excel template is available in the same folder. 
+
+The "Gift Card Tracking" file feeds into the mass tracking script and vice versa: the "giftcard_status" column on the mass tracking file pulls from "Gift Card Tracking", matching by participant ID. Every time a new mass tracking file is made, all the new contact info will be added to the "Gift Card tracking file". Any gift card updates should be made on "Gift Card Tracking.csv", NOT on a mass tracking file. 
+
+# Instructions 
+1) Verify that all files in the "Participant Tracking/Call logs (Completed)" folder are saved as .csv files.
+
+2) Before running code, specify which participant groups you want to include in this mass tracking file. 
+   Find the 'include' variable at the beginning of the code block, and include the names of the groups you wish to keep. 
+  
+  Options: {'Non-mono'} {'Mono without ME/CFS'} {'ME/CFS'} 
+  Write the name of your desired group in quotes, and separate multiple groups with a comma.
+  Capitalization and spacing must match the example provided below. 
+  
+  Examples: 
+    include <- c('Mono without ME/CFS', 'ME/CFS') 
+  Returns a mass tracking file with only 'Mono without ME/CFS' and 'ME/CFS' participants. 
+  
+    include <- c('Non-mono', 'Mono without ME/CFS', 'ME/CFS')
+  Returns all call logs. 
+
+3) Run the entire code block. 
+
+```{r}
+## CHOOSE PARTICIPANT GROUPS TO INCLUDE
+# Options: {'Non-mono'} {'Mono without ME/CFS'} {'ME/CFS'} 
+include <- c('Non-mono', 'Mono without ME/CFS', 'ME/CFS')
+
+# Defines function to compile the mass tracking file.
+# Grabs all .csv files in the folder designated in the specific path variable. 
+create_masstracking <- function(path, pattern = "*.csv") {
+  files = list.files(path, pattern, full.names = TRUE)
+  data <- rbindlist(lapply(files, function(x) fread(x)), use.names = TRUE, fill = TRUE)
+  data %<>% as.data.frame
+  return(data)
+}
+
+# Create mass tracking file
+masstrackingfile <- create_masstracking(path = path.call, pattern = "*.csv")
+
+# Add mono dx data to mass tracking file, relocate column after participant ID
+masstrackingfile %<>% left_join(mono.dx, by="participant_id") %>%
+  relocate(mono_dx, .after = participant_id)
+
+# Add gift card data to mass tracking file, relocate column before participant ID
+giftcard <- select(read.csv(path.giftcard), giftcard_status:participant_id)
+
+masstrackingfile %<>% left_join(giftcard, by="participant_id") %>%
+  relocate(any_of(c('giftcard_status', 'SurveyComp')), .before = participant_id)
+
+# Order mass tracking file by participant ID so duplicate MG#'s are next to each other. 
+masstrackingfile <- masstrackingfile[order(masstrackingfile$participant_id), ]
+
+# Save current tracking info as new "Gift Card Tracking" file. 
+giftcard <- subset(masstrackingfile, select = giftcard_status:alternate_email) #Select only relevant info
+giftcard %<>% unique(by = c('participant_id', 'first_name', 'last_name', 'email', 'phone_number')) #Remove duplicates
+write.csv(giftcard, file = path.giftcard, row.names = FALSE)
+
+# Filtering participant groups
+masstrackingfile %<>% filter(mono_dx %in% include)
+
+# Name and save mass tracking file as a .csv file
+date <- as.character(Sys.Date())
+filename <- paste(path.masstracking, "/Mass Tracking Report ", date, ".csv", sep = "")
+write.csv(masstrackingfile, file = filename, row.names = FALSE)
+
+```
+## Case Summaries: Step 1
+# Description
+This code block does the following:
+1) Pulls only case summaries that have not already been processed from the most recent REDcap data.
+2) Checks if 90% of the DSQ questions have been filled out (for SurveyComp variable). 
+3) Checks for duplicate participant IDs.
+4) Saves duplicate data and remaining most recent data to the 'Review' folder for inspection. 
+
+Incomplete survey responses are removed before case summary files are saved for review.
+
+For the SurveyComp variable: "1" = at least 90% complete, "0" = less than 90% complete.
+
+As is, the SurveyComp function only looks at columns between "fatigue13f" and "smells66s". 
+If DSQ-2 questions are ever added, or if you'd like to base survey completion on more than just these questions, go down to the section labeled "#Assess survey completion" (line 282) and change the "start" and "end" variable names to the ones of your choosing. Variable names must exactly match the desired column name in the data set, and must be contained in quotes.
+
+  Ex: 
+  mostrecent.data %<>% SurveyComp(start = "fatigue13f", end = "tempflux89s")
+  
+At the end of this section, you will be prompted to review data before moving on to archiving. The purpose of reviewing duplicates is to allow you to chose which case summary you want to "keep" for any given participant. The purpose of reviewing data in the "Most Recent Data (Review)" folder is to check for any weirdness that needs to be manually corrected before data is processed (i.e. someone listed their birthday as 69/69/6969 or formatted their MG# incorrectly). 
+
+# Instructions
+1) Download most recent REDCap data as a Microsoft Excel/CSV file. 
+
+2) Move the REDCap data into the "Case Summaries/Most Recent Data" folder. 
+
+3) Run the code block (hit green 'play' button below). It might take a second to finish if there are many archived files. 
+
+4) Check the console (bottom left window on R Studio) for a message about duplicates. If duplicates have been detected, the following message should appear: 
+   "Duplicate Participant IDs found.
+   Please review data file(s) in 'Duplicates' folder."
+
+If no duplicated were detected, you will see the following message:
+"No duplicates found."
+ 
+5) Review the files in the "Case Summaries/Review/Duplicates" folder. Each folder will contain a file with all the case summaries belonging to that participant ID. For each file in the 'Duplicates' folder: 
+  a) Delete the rows of the case summaries you do not wish to keep in the data set. 
+  b) Re-save the file as a .csv (in the same folder where you found it).
+
+5) Review the file in the "Case Summaries/Review/Most Recent Data (Review)" folder. 
+  a) Make any alterations/deletions that are necessary. 
+  b) Re-save the file as a .csv (in the same folder where you found it). 
+
+Continue to the next section to archive the reviewed data. 
+
+```{r}
+# Define function to convert date formats 
+    convert_date <- function(data) {
+      # Checking if date conversion is needed (i.e. if there are any dates in %Y-%m-%d format)
+      test.data <- data %>% select(qxx_date, lockdowna, lockdownb, lockdown2, demo_dob)
+      test <- function(x) !is.na(as.Date(x, "%Y-%m-%d"))
+      if(any(sapply(test.data, test))) {
+        # Function to convert %Y-%m-%d to Excel short date (%m/%d/%Y)
+          short_date <- function(date) {
+            y <- substr(date, start = 1, stop = 4)
+            m <- substr(date, start = 6, stop = 7)
+            d <- substr(date, start = 9, stop = 10)
+            
+            m <- ifelse(startsWith(m, "0"), substr(m, start = 2, stop = 2) , m) 
+            d <- ifelse(startsWith(d, "0"), substr(d, start = 2, stop = 2) , d)
+            
+            short.date <- ifelse(is.na(date), NA, paste(m, d, y, sep = "/"))
+            return(short.date)
+          }
+        data %<>% mutate(across(c(qxx_date, lockdowna, lockdownb, lockdown2, demo_dob), short_date))
+        
+        # Timestamp needs special conversion process
+          timestamp <- data$maintenance_of_mononucleosis_prospective_health_st_timestamp
+        
+          for (t in 1:length(timestamp)) {
+            stamp <- timestamp[[t]]
+            
+            if (!stamp == "[not completed]") {
+              s <- regexpr(" ", stamp)[1]
+              date <- substr(stamp, start = 1, stop = s-1)
+              time <- substr(stamp, start = s+1, stop = nchar(stamp))
+              date <- ifelse(!is.na(as.Date(date, format = "%Y-%m-%d")), short_date(date), date)
+              stamp <- paste(date, time, sep = " ")
+              timestamp[t] <- stamp
+            }
+          }
+        data[, "maintenance_of_mononucleosis_prospective_health_st_timestamp"] <- timestamp
+      }
+      return(data)
+    }
+
+# Define function to grab all case summary files 
+  all_case_summaries <- function(path, pattern) {
+    files = list.files(path, pattern, full.names = TRUE, recursive = TRUE)
+    data <- rbindlist(lapply(files, function(x) fread(x)), use.names = TRUE, fill = TRUE)
+    data %<>% convert_date
+    data %<>% as.data.frame
+    return(data)
+  }
+
+# Grab most recent REDcap case summary file
+  mostrecent.data <- path.mostrecent %>%
+    all_case_summaries(pattern = "*.csv") 
+
+# Grab all archived case summary files
+  archived.data <- path.archived %>%
+    all_case_summaries(pattern = "*_maintenance.csv") 
+
+if (nrow(archived.data) > 0) {
+# Make sure archived data is ordered by record ID
+  archived.data <- archived.data[order(archived.data$recordid), ]
+
+# Pull data that hasn't already been processed previously
+  last.recordid <- archived.data[nrow(archived.data), 'recordid']
+  start.row <- which(mostrecent.data['recordid'] == last.recordid) + 1
+  end.row <- nrow(mostrecent.data)
+  mostrecent.data <- mostrecent.data[c(start.row:end.row), ]
+ }
+  
+# Define function to assign SurveyComp variable
+  SurveyComp <- function (data, start, end) {
+    # Calculate max number of missing questions allowed to meet 90% completion
+      start.col <- which(colnames(data) == start)
+      end.col <- which(colnames(data) == end)
+      comp90 <- 0.1 * (abs(end.col - start.col))
+    
+    # Calculate number of completed DSQ questions
+      data %<>% mutate(missing = rowSums(is.na(data[, start.col:end.col])),
+                       SurveyComp = case_when(missing > comp90 ~ 0,
+                                              missing < comp90 ~ 1), 
+                       .after = maintenance_of_mononucleosis_prospective_health_st_timestamp)
+    
+    # Remove "missing" variable
+      data %<>% subset(select = - missing)
+      
+      return(data)
+  }
+
+# Assess survey completion
+  mostrecent.data %<>% SurveyComp(start = "fatigue13f", end = "smells66s")
+
+# Add Mono dx column
+  mostrecent.data <- left_join(mostrecent.data, mono.dx, by="participant_id", sort = FALSE)
+  mostrecent.data %<>% relocate("participant_id", .before = "recordid")
+
+# Relocate variables
+  vars <- c("mono_dx", "covid19", "covid19a")
+  mostrecent.data %<>% relocate(any_of(vars), .after = maintenance_of_mononucleosis_prospective_health_st_timestamp)
+
+# Filter incomplete surveys
+  mostrecent.data %<>% filter(SurveyComp == 1)
+
+# Define function to check for duplicates
+  check_duplicates <- function(mostrecent.data, archived.data) {
+    combined.data <- rbind(mostrecent.data, archived.data)
+    
+    # Check for duplicates with archived data
+    dup <- which(duplicated(combined.data$participant_id))
+    dup.ID <- combined.data$participant_id[dup]
+    
+    if (length(dup.ID) > 0) {
+      cat("\n", "Duplicate Participant IDs found.", "\n", 
+          "Please review data file(s) in 'Duplicates' folder.", sep = "")
+        
+      # Save duplicate data for review
+      for (ID in 1:length(dup.ID)) {
+        dup.data <- filter(combined.data, participant_id == dup.ID[ID]) 
+        path.mg <- file.path(path.dup, dup.ID[ID])
+        dir.create(path.mg)
+        filename <- paste(path.mg, "/", dup.ID[ID], "_maintenance.csv", sep = "")
+        write.csv(dup.data, file = filename, row.names = FALSE)
+      }
+
+      # Remove duplicate data from most recent data
+      mostrecent.data <- mostrecent.data[-c(which(mostrecent.data$participant_id %in% dup.ID)), ]
+      return(mostrecent.data)
+    } else {
+      cat("\n", "No duplicates found.", "\n", sep = "")
+      return(mostrecent.data)
+    }
+  }
+  
+# Check for duplicates, remove duplicate case summaries for review
+  mostrecent.data <- check_duplicates(mostrecent.data = mostrecent.data, archived.data = archived.data)
+
+# Save all recent case summaries to "Review" folder 
+  filename <- paste(path.review, "/Maintenance of Mono Data ", Sys.Date(), ".csv", sep = "")
+  write.csv(mostrecent.data, file = filename, row.names = FALSE)
+  
+```
+## Case Summaries: Step 2
+# Description
+The following code block:
+1) Saves reviewed recent data in new "Projections" subfolder.
+2) Saves reviewed case summaries and reviewed duplicates into individual archived subfolders.
+   Each subfolder contains the raw data saved as a .csv, and a case summary using the "Case Summary" excel template. 
+3) Updates "MG numbers by caller" file based on survey completion.
+4) Updates "Gift Card Tracking" file. 
+
+All case summaries remaining in the "Review" folder (including all duplicate files and reviewed most recent data) will be relocated into individual archive folders. 
+
+The function for archiving case summaries automatically creates a subfolder for each MG# (or replaces the file in an existing MG# folder, in the case of duplicates). Other documents can be added to the subfolders (i.e. physician reports, etc.). Just make sure that there is only one file in each folder titled "MG####_maintenance.csv" because the previous code block compiles all files with that name pattern into a master file of archived case summaries.  
+
+If you ever need to update the "MG numbers by caller" file, always save as a .csv in the same location. 
+
+# Instructions
+1) Verify that all files in the "Case/Summaries/Review" subfolders ("Duplicates" and "Most Recent Data (Review)") have been saved as .csv files. 
+
+2) Make sure that all Excel files have been closed (if you don't, you'll get an error saying "Permission denied" for the open files.)
+
+2) Run the code block.
+
+3) Check that projections have been uploaded in the "Projections" folder.
+
+4) Verify that case summaries have been correctly processed.
+  a) Open up most recent file in "Projections" folder (should be saved in a subfolder with today's date).
+  b) Copy one random MG# from the file. 
+  c) Go to "Case Summaries/Archived Data" in file explorer.
+  d) Paste MG# in search bar. 
+  e) Verify that folder and "_maintenance" files exist for MG#. Feel free to repeat with another MG#. 
+
+Continue to next section to update Stage 2 call log.
+```{r}
+# Grab reviewed most recent data
+  reviewed.data <- all_case_summaries(path.review, pattern = "*.csv")
+
+# Grab duplicate case summaries not already archived and reviewed data
+  if(length(list.dirs(path.dup, recursive = TRUE)) > 1) {
+    reviewed.duplicates <- all_case_summaries(path.dup, pattern = "*.csv")
+    reviewed.duplicates  <- reviewed.duplicates[which(!reviewed.duplicates$recordid %in% archived.data$recordid), ]
+    reviewed.data %<>% rbind(reviewed.duplicates)
+  }
+
+# Define function for creating case summaries
+  create_case_summary <- function(data, path) {
+    MG.num <- data$participant_id
+    for (mg in 1:length(MG.num)) {
+      path.mg <- file.path(path, MG.num[mg])
+      case <- data[mg, ]
+        
+      filename.csv <- paste(path.mg, "/", MG.num[mg], "_maintenance.csv", sep = "")
+      
+      # If MG# directory does not already exist, make one. 
+      if (!dir.exists(path.mg)) {
+        dir.create(path.mg)
+      } 
+      
+      # Save raw data as .csv file
+      write.csv(case, file = filename.csv, row.names = FALSE)
+      
+      # Create "Case Summary" excel file
+       xl.case <- loadWorkbook(case.summary.template)
+       writeData(wb = xl.case, 
+                 sheet = "Raw Data", 
+                 x = case, startCol = 1, startRow = 2, 
+                 colNames = FALSE, rowNames = FALSE)
+       
+       filename.xlsx <- paste(path.mg, "/", MG.num[mg], "_maintenance.xlsx", sep = "")
+       saveWorkbook(wb = xl.case, file = filename.xlsx, overwrite = TRUE)
+    }
+  }
+
+# Create individual case summaries in 'Archived Data' folder
+  create_case_summary(reviewed.data, path.archived)
+  
+# Update "archived.data" variable
+  archived.data <- path.archived %>%
+    all_case_summaries(pattern = "*_maintenance.csv") 
+  
+# Move reviewed recent data to 'Projections' folder
+  projections.folder <- file.path(path.projections, Sys.Date())
+  dir.create(projections.folder)
+  filename <- paste(projections.folder, "/Maintenance of Mono Data ", Sys.Date(), ".csv", sep = "")
+  write.csv(reviewed.data, file = filename, row.names = FALSE)
+  
+# Clear directories for next use
+  unlink(file.path(path.mostrecent, "*"), recursive = FALSE)
+  unlink(file.path(path.review, "*"), recursive = FALSE)
+  unlink(file.path(path, "Case Summaries", "Review", "Duplicates", "*"), recursive = TRUE)
+  
+# Define function to update "MG numbers by caller" file
+  update_MGbycaller <- function(file, archived.data) {
+    file <- read.csv(file)
+    archived.ID <- archived.data$participant_id
+  
+    for (j in seq(from = 1, to = ncol(file), by = 2)) {
+      assigned.ID <- file[, j]
+      
+      for (i in 1:length(assigned.ID)) {
+        if (assigned.ID[i] %in% archived.ID) {
+          file[i, j+1] <- "Yes"
+        } else if (assigned.ID[i] == "") {
+          file[i, j+1] <- ""
+        } else {
+          file[i, j+1] <- "No"
+        }
+      }
+    }
+    return(file)
+  }
+
+# Update "MG numbers by caller" file
+  MGnum.bycaller <- update_MGbycaller(path.bycaller, archived.data)
+  write.csv(MGnum.bycaller, file = path.bycaller, row.names = FALSE)
+
+# Update "Gift Card Tracking" file with SurveyComp variable
+  giftcard <- read.csv(path.giftcard)
+  giftcard %<>% mutate(SurveyComp = if_else(giftcard$participant_id %in% archived.data$participant_id, 1, 0), 
+                       .before = "participant_id")
+  write.csv(giftcard, file = path.giftcard, row.names = FALSE)
+  
+# Update "Archived Data Masterfile"
+  write.csv(archived.data, file = path.archive.master, row.names = FALSE)
+
+```
+## Case Summaries: Step 3
+# Description
+The following code block:
+1) Pulls call log info for newly archived participant IDs.
+2) Updates "Stage 2 Call log" with relevant info. 
+3) Gives a readout in the console with the # of participants added in each Stage 2 group. 
+
+The readout message will look something like this: 
+  "Partipants added to Stage 2 Call Log: 
+  5 MECFS 
+  14 Mono 
+  29 Non Mono 
+  6 Non Mono COVID"
+  
+Currently, participants in the "Non-mono" group who did not provide an answer for the "covid19" survey question are omitted from  the Stage 2 call log. 
+
+# Instructions
+1) Run the code block. 
+
+2) Check the console (bottom left window) or scroll to the end of the script for message about how many new participants have been added to each stage 2 group. 
+
+```{r}
+# Grabs all .csv files in the folder designated in the specific path variable. 
+  create_masstracking <- function(path, pattern = "*.csv") {
+    files = list.files(path, pattern, full.names = TRUE)
+    data <- rbindlist(lapply(files, function(x) fread(x)), use.names = TRUE, fill = TRUE)
+    data %<>% as.data.frame
+    data %<>% mutate(across(1:ncol(data), ~ ifelse(.x == "", NA, .x)))
+  }
+
+# Create mass tracking file 
+  masstrackingfile <- create_masstracking(path.call, pattern = "*.csv")
+
+# Add mono dx data to mass tracking file, relocate column after participant ID
+  masstrackingfile %<>% left_join(mono.dx, by="participant_id") %>%
+    relocate(mono_dx, .after = participant_id)
+
+# Define function to update Stage 2 Call log
+  update_stage_2 <- function(masstrackingfile, data) {
+    cat("\n", "Partipants added to Stage 2 Call Log:", "\n")
+    # Create filter variable for Stage 2 Mono/COVID dx
+    data %<>% mutate(stage_2 = as.factor(case_when(
+      data['mono_dx'] == "Non-mono" & data['covid19'] == 0 ~ 'Non Mono',
+      data['mono_dx'] == "Non-mono" & data['covid19'] == 1 ~ 'Non Mono COVID',
+      data['mono_dx'] == "Mono without ME/CFS" ~ 'Mono',
+      data['mono_dx'] == "ME/CFS" ~ 'MECFS')))
+    
+    wb <- loadWorkbook(path.stage2)
+    groups <- levels(data$stage_2)
+    for (group in 1:length(groups)) {
+      stage2.call.log <- read.xlsx(
+        xlsxFile = path.stage2,
+        sheet = groups[group])
+      
+      cases <- data %>% 
+        filter(stage_2 == groups[group])
+      
+      contacts <- masstrackingfile %>%
+        filter(participant_id %in% cases$participant_id)
+      
+      new.ID <- which(!contacts$participant_id %in% stage2.call.log$Participant.ID)
+      cat(length(new.ID), groups[group], "\n")
+      if (length(new.ID) > 0) {
+         for (ID in 1:length(new.ID)) {
+          row <- nrow(stage2.call.log) + 1
+          r <- new.ID[ID]
+            
+          stage2.call.log[row, 'Participant.ID'] <- contacts[r, 'participant_id']
+          stage2.call.log[row, 'First.Name'] <- contacts[r, 'first_name']
+          stage2.call.log[row, 'Last.Name'] <- contacts[r, 'last_name']
+          stage2.call.log[row, 'Email'] <- contacts[r, 'email']
+          stage2.call.log[row, 'Phone.Number'] <- contacts[r, 'phone_number']
+    
+          outcomes <- contacts[r,] %>% select(paste("call", 1:7, "outcome", sep = "_"))
+          stage2.call.log[row, 'Stage.1.Outcome'] <- outcomes[max.col(!is.na(outcomes), "last")]
+          
+          case <- cases[which(cases$participant_id == contacts[r, 'participant_id']), ]
+          stage2.call.log[row, 'Stage.1.Timestamp'] <- case$maintenance_of_mononucleosis_prospective_health_st_timestamp
+          stage2.call.log[row, 'City'] <- case$lockdown4
+          stage2.call.log[row, 'Location'] <- case$lockdown5
+        }
+       writeData(wb = wb, sheet = groups[group], x = stage2.call.log)
+      }
+    }
+  saveWorkbook(wb = wb, file = path.stage2, overwrite = TRUE)
+  }
+  
+# Update Stage 2 Call log masterfile
+  update_stage_2(masstrackingfile, archived.data)
+
+```
