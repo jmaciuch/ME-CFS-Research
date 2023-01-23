@@ -1,6 +1,6 @@
 # ME-CFS-Research
 
-A compilation of scripts written during 2022 summer internship with ME/CFS Research Team at DePaul University's Center for Community Research. 
+A sample compilation of scripts written during 2022 summer internship with ME/CFS Research Team at DePaul University's Center for Community Research. Please note that this repository does not contain completed projects, only select scripts meant to showcase technical skills. 
 
 # DESCRIPTION
 
@@ -41,5 +41,5 @@ Full script for automating and processing REDCap data for ongoing study (as of J
 
 # LICENSE
 
-This repository is made public for the sole purpose of showcasing previous work. None of the content herein may be used with explicit permission from the author (contact: jnmaciuch@gmail.com).  
+This repository is made public for the sole purpose of showcasing previous work. None of the content herein may be used without explicit permission from the author (contact: jnmaciuch@gmail.com).  
 
