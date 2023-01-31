@@ -24,7 +24,7 @@ Contains supplemental functions for eRm_Rasch.R for pulling DSQ variables for sy
 
 ## Mono Study Script.Rmd
 
-Full script for automating and processing REDCap data for ongoing study (as of Jan 2023) by Center for Community Research at DePaul University. 
+Full script for automating and processing REDCap data for ongoing study (as of Jan 2023) by Center for Community Research at DePaul University. Project consisted of consolidating old method of data processing (which consisted of 4 scripts in R and 4 in Visual Basic) into one concise script that could be used by those unfamiliar with coding. 
 
 # DEPENDENCIES
 
